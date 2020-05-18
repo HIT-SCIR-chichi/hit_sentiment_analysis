@@ -15,4 +15,4 @@ test_data = data2vec(test_data)  # 将数据转换为模型的输入格式
 
 res = model.predict_classes(test_data)  # 预测结果
 with open('./source/1172510217.csv', 'w', encoding='utf-8') as f:
-    f.write('\n'.join(['%d,%s' % (idx, value[0]) for idx, value in enumerate(res)]))
+    f.write('\n'.join(['%d,%s' % (idx, value) for idx, value in enumerate(res)]))

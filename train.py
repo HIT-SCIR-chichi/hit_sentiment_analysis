@@ -1,19 +1,22 @@
 """
 训练模型.
 """
-from keras.layers import Dense, Dropout, Activation, Embedding, LSTM
+from keras.layers import Dense, Embedding, LSTM, SpatialDropout1D
 from keras.preprocessing.sequence import pad_sequences
+from sklearn.metrics import f1_score, recall_score
 from gensim.models.word2vec import Word2Vec
+from numpy import random, zeros, asarray
+from keras.utils import to_categorical
+from keras.callbacks import Callback
 from gensim.corpora import Dictionary
 from keras.models import Sequential
-from numpy import random, zeros
 import jieba
 
-Embed_dim = 100  # 观点的词中的每一个输出的向量维度
+Embed_dim = 128  # 观点的词中的每一个输出的向量维度
 Min_count = 1  # 训练词向量中使用的最小词频
-Epochs = 2
-Batch = 16
-dev_size, test_size = 0.1, 0.1
+Epochs = 8
+Batch = 128
+dev_size, test_size = 0, 0.1
 x_train, x_dev, x_test = None, None, None
 y_train, y_dev, y_test = None, None, None
 seed = 0
@@ -21,9 +24,13 @@ max_len = 676  # 观点句经分词后得到列表的长度最大值
 word2idx, word2vec, embed_weight = {}, {}, []
 
 
-def macro_f1(y_true, y_pred):
-    from sklearn.metrics import f1_score
-    return f1_score(y_true, y_pred, average='macro')
+class Metrics(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        val_predict = (asarray(self.model.predict(self.validation_data[0]))).round()
+        val_labels = self.validation_data[1]
+        val_recall = recall_score(val_labels, val_predict, average='macro')
+        macro_f1 = f1_score(val_labels, val_predict, average='macro')
+        print('- val_recall: %.4f - val_f1: %.4f' % (macro_f1, val_recall))
 
 
 def parse_data(path: str):  # 解析教师给的源标签文件，并将评论中的换行与空格字符去除，返回值为词典{index:comment}
@@ -57,6 +64,7 @@ def split_data():  # 将数据划分为训练集、验证集、测试集，格�
 
     dev_num, test_num = int(len(x) * dev_size), int(len(x) * test_size)
     train_num = len(x) - dev_num - test_num
+    y = to_categorical(y, 2, 'int32')
     x_train, x_dev, x_test = x[:train_num], x[train_num:train_num + dev_num], x[train_num + dev_num:]
     y_train, y_dev, y_test = y[:train_num], y[train_num:train_num + dev_num], y[train_num + dev_num:]
 
@@ -90,21 +98,23 @@ def main():
     split_data()
     word2vec_model = word2vec_train()
     word2vec_init(word2vec_model)
+    metrics = Metrics()  # 回调函数用于计算宏F1值
 
     model = Sequential()
     model.add(Embedding(len(embed_weight), Embed_dim, mask_zero=True, input_length=max_len, weights=[embed_weight]))
-    model.add(LSTM(units=50, activation='tanh'))
-    model.add(Dropout(0.5))
-    model.add(Dense(1))
-    model.add(Activation('relu'))
+    model.add(SpatialDropout1D(0.5))
+    model.add(LSTM(units=64, dropout=0.5, recurrent_dropout=0.5))
+    model.add(Dense(2, activation='softmax'))
     model.summary()
-    model.compile(optimizer='rmsprop', loss='binary_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-    model.fit(data2vec(x_train), y_train, Batch, Epochs, validation_data=(data2vec(x_dev), y_dev))
+    # model.fit(data2vec(x_train), y_train, Batch, Epochs, validation_data=(data2vec(x_dev), y_dev), callbacks=[metrics])
+    model.fit(data2vec(x_train), y_train, Batch, Epochs)
     model.save('./model/train')
 
-    res = model.evaluate(data2vec(x_test), y_test)  # res[0]为loss值，res[1]为选定指标值
-    print('%s: %.2f' % (model.metrics_names[1], res[1]))
+    y_test_pred = (asarray(model.predict(data2vec(x_test)))).round()  # 对测试集进行预测
+    res = f1_score(y_test, y_test_pred, average='macro')
+    print('f1: %.4f' % res)
 
 
 if __name__ == '__main__':
