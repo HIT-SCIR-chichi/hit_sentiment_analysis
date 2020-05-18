@@ -2,21 +2,22 @@
 训练模型.
 """
 from keras.layers import Dense, Embedding, LSTM, SpatialDropout1D
+from sklearn.metrics import f1_score, recall_score, accuracy_score
 from keras.preprocessing.sequence import pad_sequences
-from sklearn.metrics import f1_score, recall_score
 from gensim.models.word2vec import Word2Vec
 from numpy import random, zeros, asarray
 from keras.utils import to_categorical
 from keras.callbacks import Callback
 from gensim.corpora import Dictionary
 from keras.models import Sequential
+import matplotlib.pyplot as plt
 import jieba
 
 Embed_dim = 128  # 观点的词中的每一个输出的向量维度
 Min_count = 1  # 训练词向量中使用的最小词频
 Epochs = 8
 Batch = 128
-dev_size, test_size = 0, 0.1
+dev_size, test_size = 0.1, 0.1  # 调参阶段，设置dev_size为0.1；调参完毕后，将dev划入到train中，所以dev_size为0
 x_train, x_dev, x_test = None, None, None
 y_train, y_dev, y_test = None, None, None
 seed = 0
@@ -25,12 +26,15 @@ word2idx, word2vec, embed_weight = {}, {}, []
 
 
 class Metrics(Callback):
+    def on_train_begin(self, logs=None):
+        self.macro_f1 = []
+
     def on_epoch_end(self, epoch, logs=None):
         val_predict = (asarray(self.model.predict(self.validation_data[0]))).round()
         val_labels = self.validation_data[1]
-        val_recall = recall_score(val_labels, val_predict, average='macro')
         macro_f1 = f1_score(val_labels, val_predict, average='macro')
-        print('- val_recall: %.4f - val_f1: %.4f' % (macro_f1, val_recall))
+        self.macro_f1.append(macro_f1)
+        print('- val_f1: %.4f' % macro_f1)
 
 
 def parse_data(path: str):  # 解析教师给的源标签文件，并将评论中的换行与空格字符去除，返回值为词典{index:comment}
@@ -70,7 +74,7 @@ def split_data():  # 将数据划分为训练集、验证集、测试集，格�
 
 
 def word2vec_train():  # 训练词向量模型，并输出结果到模型文件中
-    model = Word2Vec(x_train, min_count=Min_count, size=Embed_dim, hs=1, window=3)  # todo 扩大训练集
+    model = Word2Vec(x_train, min_count=Min_count, size=Embed_dim, hs=1, window=3)
     model.save('./model/word2vec')
     return model
 
@@ -108,13 +112,19 @@ def main():
     model.summary()
     model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
 
-    # model.fit(data2vec(x_train), y_train, Batch, Epochs, validation_data=(data2vec(x_dev), y_dev), callbacks=[metrics])
-    model.fit(data2vec(x_train), y_train, Batch, Epochs)
+    hist = model.fit(data2vec(x_train), y_train, Batch, Epochs, validation_data=(data2vec(x_dev), y_dev),
+                     callbacks=[metrics])  # 调参阶段采用此行代码
+    # model.fit(data2vec(x_train), y_train, Batch, Epochs)  # 调参完毕采用此行代码
     model.save('./model/train')
 
     y_test_pred = (asarray(model.predict(data2vec(x_test)))).round()  # 对测试集进行预测
     res = f1_score(y_test, y_test_pred, average='macro')
     print('f1: %.4f' % res)
+
+    plt.plot(range(Epochs), hist.history['accuracy'], range(Epochs), hist.history['val_accuracy'], range(Epochs),
+             metrics.macro_f1)
+    plt.legend(['acc', 'val_acc', 'val_f1'], loc='upper right')
+    plt.show()
 
 
 if __name__ == '__main__':
